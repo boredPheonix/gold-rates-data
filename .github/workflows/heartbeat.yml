@@ -1,0 +1,52 @@
+# Fallback scheduler. GitHub's `schedule:` trigger is best-effort and can skip
+# hours at a time (especially in new repositories). This dispatches the update
+# whenever the newest one is more than ~12 minutes old. It stops by itself once
+# GitHub's scheduler is reliable (3+ scheduled runs in the last hour), or after
+# `remaining` ticks (default 96 ticks ≈ 24 hours). Start: Actions → heartbeat → Run workflow.
+name: heartbeat (fallback scheduler)
+
+on:
+  workflow_dispatch:
+    inputs:
+      remaining:
+        description: 'Ticks left before stopping (~15 min each)'
+        default: '96'
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: heartbeat
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Dispatch an update unless GitHub's scheduler is working
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REMAINING: ${{ inputs.remaining }}
+        run: |
+          set -euo pipefail
+          now=$(date +%s)
+          runs="repos/$GITHUB_REPOSITORY/actions/workflows/update.yml/runs"
+          sched=$(gh api "$runs?event=schedule&per_page=10" --jq "[.workflow_runs[] | select(($now - (.created_at | fromdateiso8601)) < 3600)] | length")
+          if [ "$sched" -ge 3 ]; then
+            echo "GitHub's scheduler is reliable ($sched scheduled runs in the last hour). Heartbeat stops here."
+            exit 0
+          fi
+          last=$(gh api "$runs?status=success&per_page=1" --jq '.workflow_runs[0].created_at // empty')
+          age=$(( now - $(date -d "${last:-1970-01-01T00:00:00Z}" +%s) ))
+          if [ "$age" -ge 720 ]; then
+            gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/update.yml/dispatches" -f ref=main
+            echo "Last update was ${age}s ago; dispatched a new one."
+          else
+            echo "Last update was ${age}s ago; no dispatch needed."
+          fi
+          echo "Ticks remaining: $REMAINING"
+          if [ "${REMAINING:-0}" -le 0 ]; then echo "Out of ticks; stopping."; exit 0; fi
+          sleep 840
+          gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/heartbeat.yml/dispatches" -f ref=main -f "inputs[remaining]=$(( REMAINING - 1 ))"

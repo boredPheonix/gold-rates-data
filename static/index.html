@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gold rates data</title>
+<style>
+  :root { --bg: #fff8f1; --fg: #1f1b13; --muted: #6b5f4a; --card: #f6ecdf; --accent: #7a5900; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #17130b; --fg: #ece1d4; --muted: #b9ab93; --card: #241f16; --accent: #f2bf48; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  p { color: var(--muted); }
+  ul { list-style: none; padding: 0; }
+  li { background: var(--card); border-radius: 14px; padding: 12px 16px; margin: 8px 0; }
+  a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  code { font-size: 14px; }
+  #status { font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gold &amp; silver rates API</h1>
+  <p>City-wise gold (24K/22K/18K) and silver rates for Indian cities, refreshed every 15 minutes. Prices in INR, excluding GST and making charges.</p>
+  <p id="status">Loading…</p>
+  <ul>
+    <li><a href="api/v1/latest.json">api/v1/latest.json</a> · all cities, today</li>
+    <li><a href="api/v1/cities.json">api/v1/cities.json</a> · city list</li>
+    <li><a href="api/v1/cities/kakinada.json">api/v1/cities/{slug}.json</a> · one city with daily history</li>
+    <li><a href="api/v1/spot.json">api/v1/spot.json</a> · international spot</li>
+  </ul>
+</main>
+<script>
+  fetch('api/v1/latest.json', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+    const t = new Date(j.generatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+    document.getElementById('status').textContent = `Last updated ${t} IST · ${j.cities.length} cities`;
+  }).catch(() => { document.getElementById('status').textContent = ''; });
+</script>
+</body>
+</html>

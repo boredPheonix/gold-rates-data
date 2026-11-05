@@ -1,0 +1,165 @@
+name: Update rates
+
+on:
+  schedule:
+    # Every 15 minutes, on off-peak minutes (GitHub delays/drops runs at :00/:15/:30 under load).
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Force a full refresh of every city'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - 'scraper/**'
+      - 'import/**'
+      - 'static/**'
+      - '.github/workflows/update.yml'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out data branch
+        run: |
+          # Exit code 2 means "branch does not exist" (first run only). Any other
+          # failure must stop the run: starting from empty would wipe the history.
+          set +e
+          git ls-remote --exit-code --heads origin data > /dev/null
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            git fetch --depth 1 origin data
+            git worktree add data origin/data
+          elif [ $rc -eq 2 ]; then
+            echo "No data branch yet; starting a new one."
+            mkdir -p data
+          else
+            echo "::error::Could not read the data branch (git exit $rc). Refusing to continue."
+            exit 1
+          fi
+          # Keep a copy to verify later that no history was lost.
+          mkdir -p "$RUNNER_TEMP/history-before"
+          if [ -d data/history ]; then cp -r data/history/. "$RUNNER_TEMP/history-before/"; fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Merge imported history (fills gaps only, idempotent)
+        run: node scraper/src/import-history.mjs --data data --dir import/history
+
+      - name: Scrape rates
+        env:
+          FORCE_FULL: ${{ inputs.full }}
+        run: node scraper/src/scrape.mjs --data data --out site
+
+      # Optional files delivered to the `extras` branch by another job
+      # (market note, latest app version). Only these names are published,
+      # and only if they are valid JSON.
+      - name: Add extras
+        run: |
+          set +e; git ls-remote --exit-code --heads origin extras > /dev/null; rc=$?; set -e
+          if [ $rc -ne 0 ]; then echo "No extras branch"; exit 0; fi
+          git fetch --depth 1 origin extras
+          for f in insight.json app.json; do
+            if git cat-file -e "origin/extras:$f" 2>/dev/null; then
+              git show "origin/extras:$f" > "$RUNNER_TEMP/$f"
+              if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$RUNNER_TEMP/$f"; then
+                cp "$RUNNER_TEMP/$f" "site/api/v1/$f"; echo "published $f"
+              else
+                echo "::warning::$f on extras is not valid JSON; skipped"
+              fi
+            fi
+          done
+
+      - name: Assemble site
+        run: |
+          cp -r static/. site/
+          touch site/.nojekyll
+          ls -la site site/api/v1 | head -30
+
+      - name: Check that no history was lost
+        run: node scraper/src/check-history.mjs "$RUNNER_TEMP/history-before" data/history
+
+      - name: Save data branch
+        working-directory: data
+        run: |
+          set -euo pipefail
+          if [ ! -d .git ] && [ ! -f .git ]; then
+            git init -q -b data
+            git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          else
+            git checkout -q --orphan data-new
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "data $(date -u +%FT%TZ)"
+          git push -qf origin HEAD:data
+
+      # Append-only backup: one commit per day (IST) with the full history.
+      # Never force-pushed, so any day's history can be restored from it.
+      - name: Daily history backup (data-archive branch)
+        continue-on-error: true
+        env:
+          REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          TODAY=$(TZ=Asia/Kolkata date +%F)
+          A="$RUNNER_TEMP/archive"
+          set +e; git ls-remote --exit-code --heads origin data-archive > /dev/null; rc=$?; set -e
+          if [ $rc -eq 0 ]; then
+            git clone -q --depth 1 --branch data-archive "$REMOTE" "$A"
+            if [ "$(git -C "$A" log -1 --format=%s)" = "archive $TODAY" ]; then echo "Already archived $TODAY"; exit 0; fi
+          elif [ $rc -eq 2 ]; then
+            git init -q -b data-archive "$A"
+            git -C "$A" remote add origin "$REMOTE"
+          else
+            echo "::warning::Could not read data-archive (git exit $rc); skipping backup."; exit 0
+          fi
+          rm -rf "$A/history" && cp -r data/history "$A/history"
+          cp data/snapshot.json "$A/snapshot.json"
+          git -C "$A" config user.name "github-actions[bot]"
+          git -C "$A" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$A" add -A
+          git -C "$A" commit -qm "archive $TODAY" || { echo "Nothing to archive"; exit 0; }
+          git -C "$A" push -q origin HEAD:data-archive
+
+      # Skip (instead of failing) if Pages is not set to "GitHub Actions" yet;
+      # the history above is saved either way.
+      - id: pages
+        uses: actions/configure-pages@v5
+        continue-on-error: true
+      - if: steps.pages.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        if: steps.pages.outcome == 'success'
+        uses: actions/deploy-pages@v4
+
+      - name: Check the live API
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        run: |
+          sleep 20
+          url="${{ steps.deploy.outputs.page_url }}api/v1/latest.json"
+          curl -fsS "$url" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("live:", j.generatedAt, j.cities.length, "cities")})'

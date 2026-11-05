@@ -1,0 +1,11 @@
+{
+  "name": "gold-rates-data-scraper",
+  "private": true,
+  "type": "module",
+  "description": "Scrapes city-wise gold/silver rates in India and publishes a static JSON API",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "scrape": "node src/scrape.mjs --data ../data --out ../site",
+    "test": "node --test test/*.test.mjs"
+  }
+}
