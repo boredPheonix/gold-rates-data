@@ -1,0 +1,20 @@
+{
+  "sig": "54012c5f64ef95d6e48c4f4ad6348ca0ea984a80",
+  "ratesChangedAt": "2026-11-28T04:15:46.263Z",
+  "spotRef": {
+    "at": "2026-11-28T04:15:21Z",
+    "date": "2026-11-28",
+    "xauInrG": 10910.77,
+    "xagInrG": 129.225
+  },
+  "lastFullRefresh": "2026-11-28T10:31:10.184Z",
+  "checkedAt": "2026-11-28T12:45:49.258Z",
+  "lastSpot": {
+    "at": "2026-11-28T12:45:26Z",
+    "xauUsd": 3650,
+    "xagUsd": 43.23,
+    "usdInr": 92.9761,
+    "xauInrG": 10910.77,
+    "xagInrG": 129.225
+  }
+}
